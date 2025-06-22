@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, R
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
-ADMIN_ID = 123456789  # твой Telegram ID
+ADMIN_ID = 6712617550  # твой Telegram ID
 
 bot = Bot(API_TOKEN)
 dp = Dispatcher()
