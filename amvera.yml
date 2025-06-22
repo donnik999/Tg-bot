@@ -1,0 +1,5 @@
+build:
+  - pip install -r requirements.txt
+
+run:
+  cmd: python3 main.py
