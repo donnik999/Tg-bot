@@ -3,7 +3,7 @@ import re
 import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
@@ -36,6 +36,26 @@ def db_connect():
 # --- Проверка никнейма ---
 def is_valid_nick(nick):
     return bool(re.fullmatch(r'[A-Za-z0-9]+_[A-Za-z0-9]+', nick))
+
+# --- Обработчик команды /start ---
+@dp.message(Command("start"))
+async def start(message: Message):
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Начать")]],
+        resize_keyboard=True
+    )
+    await message.answer(
+        "Добро пожаловать! Для регистрации используйте команду /register <никнейм> (например: /register Sander_Kligan).\n\n"
+        "Или нажмите кнопку 'Начать'.",
+        reply_markup=kb
+    )
+
+# --- Обработчик кнопки "Начать" ---
+@dp.message(F.text == "Начать")
+async def handle_start_button(message: Message):
+    await message.answer(
+        "Для регистрации используйте команду /register <никнейм> (например: /register Sander_Kligan)."
+    )
 
 # --- Команда регистрации ---
 @dp.message(Command("register"))
