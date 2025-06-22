@@ -67,6 +67,7 @@ def main_menu(is_admin=False):
     if is_admin:
         kb.append([KeyboardButton(text="📢 Сделать объявление")])
         kb.append([KeyboardButton(text="👥 Список участников")])
+        kb.append([KeyboardButton(text="📄 Список зарегистрированных пользователей")])  # Новая кнопка
     kb.append([KeyboardButton(text="🏠 Главное меню")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -212,6 +213,25 @@ async def show_ready_list(message: Message):
         await message.reply("❗ Пока никто не откликнулся.")
         return
     text = "🟢 <b>Готовы к событию:</b>\n\n"
+    for nick, username, uid in users:
+        user_info = f"{nick} | @{username if username else uid}"
+        text += f"• {user_info}\n"
+    await message.reply(text, parse_mode="HTML")
+
+# --- Список всех зарегистрированных пользователей (только для админа) ---
+@dp.message(F.text == "📄 Список зарегистрированных пользователей")
+async def show_registered_users(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("⛔ Нет доступа.")
+        return
+    conn, c = db_connect()
+    c.execute('SELECT nickname, username, user_id FROM users')
+    users = c.fetchall()
+    conn.close()
+    if not users:
+        await message.reply("❗ Нет зарегистрированных пользователей.")
+        return
+    text = "<b>Список зарегистрированных пользователей:</b>\n\n"
     for nick, username, uid in users:
         user_info = f"{nick} | @{username if username else uid}"
         text += f"• {user_info}\n"
