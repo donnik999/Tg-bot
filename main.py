@@ -129,6 +129,4 @@ async def results(message: Message):
 
 # --- Запуск бота ---
 if __name__ == "__main__":
-    import asyncio
-    from aiogram import executor
     asyncio.run(dp.start_polling(bot))
