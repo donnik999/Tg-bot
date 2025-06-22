@@ -60,6 +60,7 @@ def is_valid_nick(nick):
 # --- Главное меню ---
 def main_menu(is_admin=False):
     kb = [
+        [KeyboardButton(text="🚀 Начать")],
         [KeyboardButton(text="📝 Регистрация")],
         [KeyboardButton(text="✏️ Редактировать никнейм")]
     ]
@@ -69,23 +70,26 @@ def main_menu(is_admin=False):
     kb.append([KeyboardButton(text="🏠 Главное меню")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- Команда /start и кнопка Главное меню ---
+# --- Команда /start, кнопка "Начать", "Главное меню" ---
 @dp.message(Command("start"))
 @dp.message(F.text == "🏠 Главное меню")
+@dp.message(F.text == "🚀 Начать")
 async def send_welcome(message: Message):
     is_admin = message.from_user.id == ADMIN_ID
     await message.answer(
         "👋 Привет!\n\n"
-        "Я бот для организации событий. Выбери действие из меню ниже 👇",
-        reply_markup=main_menu(is_admin)
+        "Ты попал в бота для выбора участников БизВара ⚔️🏆\n"
+        "Используй кнопки ниже ⬇️",
+        reply_markup=main_menu(is_admin),
+        parse_mode="HTML"
     )
 
 # --- Регистрация ---
 @dp.message(F.text == "📝 Регистрация")
 async def registration_start(message: Message, state: FSMContext):
     await message.answer(
-        "✍️ Придумай себе никнейм в формате Sander_Kligan (только латиница, знак подчеркивания _ обязательно)."
-        "\n\nВведи свой никнейм сообщением:"
+        "✍️ Придумай себе никнейм в формате <b>Имя_Фамилия</b> (только латиница, знак подчеркивания _ обязательно).\n\nВведи свой никнейм сообщением:",
+        parse_mode="HTML"
     )
     await state.set_state(RegStates.waiting_for_nick)
 
@@ -107,7 +111,8 @@ async def registration_finish(message: Message, state: FSMContext):
 @dp.message(F.text == "✏️ Редактировать никнейм")
 async def edit_nick_start(message: Message, state: FSMContext):
     await message.answer(
-        "🔄 Введи новый никнейм в формате Sander_Kligan (только латиница, знак _ обязательно):"
+        "🔄 Введи новый никнейм в формате <b>Имя_Фамилия</b> (только латиница, знак _ обязательно):",
+        parse_mode="HTML"
     )
     await state.set_state(RegStates.editing_nick)
 
