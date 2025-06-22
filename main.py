@@ -3,14 +3,25 @@ import re
 import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, Message,
+    ReplyKeyboardMarkup, KeyboardButton
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 
 API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
 ADMIN_ID = 6712617550  # твой Telegram ID
 
 bot = Bot(API_TOKEN)
 dp = Dispatcher()
+
+# FSM состояния
+class RegStates(StatesGroup):
+    waiting_for_nick = State()
+    editing_nick = State()
+    waiting_for_announce = State()
 
 # --- Работа с БД ---
 def db_connect():
@@ -19,15 +30,24 @@ def db_connect():
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            nickname TEXT
+            nickname TEXT,
+            username TEXT
         )
     ''')
     c.execute('''
         CREATE TABLE IF NOT EXISTS responses (
             user_id INTEGER,
+            nickname TEXT,
+            username TEXT,
             response TEXT,
-            event_time TEXT,
-            PRIMARY KEY (user_id, event_time)
+            announcement_id INTEGER,
+            PRIMARY KEY (user_id, announcement_id)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT
         )
     ''')
     conn.commit()
@@ -37,115 +57,160 @@ def db_connect():
 def is_valid_nick(nick):
     return bool(re.fullmatch(r'[A-Za-z0-9]+_[A-Za-z0-9]+', nick))
 
-# --- Обработчик команды /start ---
+# --- Главное меню ---
+def main_menu(is_admin=False):
+    kb = [
+        [KeyboardButton(text="📝 Регистрация")],
+        [KeyboardButton(text="✏️ Редактировать никнейм")]
+    ]
+    if is_admin:
+        kb.append([KeyboardButton(text="📢 Сделать объявление")])
+        kb.append([KeyboardButton(text="👥 Список участников")])
+    kb.append([KeyboardButton(text="🏠 Главное меню")])
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+# --- Команда /start и кнопка Главное меню ---
 @dp.message(Command("start"))
-async def start(message: Message):
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Начать")]],
-        resize_keyboard=True
-    )
+@dp.message(F.text == "🏠 Главное меню")
+async def send_welcome(message: Message):
+    is_admin = message.from_user.id == ADMIN_ID
     await message.answer(
-        "Добро пожаловать! Для регистрации используйте команду /register <никнейм> (например: /register Sander_Kligan).\n\n"
-        "Или нажмите кнопку 'Начать'.",
-        reply_markup=kb
+        "👋 Привет!\n\n"
+        "Я бот для организации событий. Выбери действие из меню ниже 👇",
+        reply_markup=main_menu(is_admin)
     )
 
-# --- Обработчик кнопки "Начать" ---
-@dp.message(F.text == "Начать")
-async def handle_start_button(message: Message):
+# --- Регистрация ---
+@dp.message(F.text == "📝 Регистрация")
+async def registration_start(message: Message, state: FSMContext):
     await message.answer(
-        "Для регистрации используйте команду /register <никнейм> (например: /register Sander_Kligan)."
+        "✍️ Придумай себе никнейм в формате Sander_Kligan (только латиница, знак подчеркивания _ обязательно)."
+        "\n\nВведи свой никнейм сообщением:"
     )
+    await state.set_state(RegStates.waiting_for_nick)
 
-# --- Команда регистрации ---
-@dp.message(Command("register"))
-async def register(message: Message):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("Пожалуйста, укажи никнейм после команды. Пример: /register Sander_Kligan")
-        return
-    nickname = args[1]
+@dp.message(RegStates.waiting_for_nick)
+async def registration_finish(message: Message, state: FSMContext):
+    nickname = message.text.strip()
     if not is_valid_nick(nickname):
-        await message.reply("Никнейм должен быть на английском и содержать '_' (пример: Sander_Kligan)")
+        await message.answer("❌ Никнейм должен быть на английском и содержать '_' (например: Sander_Kligan). Попробуй ещё раз:")
         return
     conn, c = db_connect()
-    c.execute('INSERT OR REPLACE INTO users (user_id, nickname) VALUES (?, ?)', (message.from_user.id, nickname))
+    c.execute('INSERT OR REPLACE INTO users (user_id, nickname, username) VALUES (?, ?, ?)',
+              (message.from_user.id, nickname, message.from_user.username or ""))
     conn.commit()
     conn.close()
-    await message.reply(f"Никнейм {nickname} успешно зарегистрирован!")
+    await message.answer(f"✅ Никнейм <b>{nickname}</b> успешно зарегистрирован!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id == ADMIN_ID))
+    await state.clear()
 
-# --- Команда для админа: список пользователей ---
-@dp.message(Command("list"))
-async def list_users(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("Нет доступа.")
+# --- Редактировать никнейм ---
+@dp.message(F.text == "✏️ Редактировать никнейм")
+async def edit_nick_start(message: Message, state: FSMContext):
+    await message.answer(
+        "🔄 Введи новый никнейм в формате Sander_Kligan (только латиница, знак _ обязательно):"
+    )
+    await state.set_state(RegStates.editing_nick)
+
+@dp.message(RegStates.editing_nick)
+async def edit_nick_finish(message: Message, state: FSMContext):
+    nickname = message.text.strip()
+    if not is_valid_nick(nickname):
+        await message.answer("❌ Никнейм должен быть на английском и содержать '_' (например: Sander_Kligan). Попробуй ещё раз:")
         return
     conn, c = db_connect()
-    c.execute('SELECT user_id, nickname FROM users')
-    users = c.fetchall()
+    c.execute('UPDATE users SET nickname = ?, username = ? WHERE user_id = ?', (nickname, message.from_user.username or "", message.from_user.id))
+    conn.commit()
     conn.close()
-    text = "\n".join([f"{uid}: {nick}" for uid, nick in users])
-    await message.reply(f"Список пользователей:\n{text}")
+    await message.answer(f"✅ Никнейм изменён на <b>{nickname}</b>!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id == ADMIN_ID))
+    await state.clear()
 
-# --- Команда оповещения ---
-@dp.message(Command("notify"))
-async def notify(message: Message):
+# --- Сделать объявление (только для админа) ---
+@dp.message(F.text == "📢 Сделать объявление")
+async def announce_start(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
-        await message.reply("Нет доступа.")
+        await message.reply("⛔ Нет доступа.")
         return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("Укажи время. Пример: /notify 20:00")
-        return
-    event_time = args[1]
+    await message.answer("📝 Введите текст объявления для всех участников:")
+    await state.set_state(RegStates.waiting_for_announce)
+
+@dp.message(RegStates.waiting_for_announce)
+async def announce_send(message: Message, state: FSMContext):
+    text = message.text
     conn, c = db_connect()
-    c.execute('SELECT user_id, nickname FROM users')
+    # записываем объявление
+    c.execute('INSERT INTO announcements (text) VALUES (?)', (text,))
+    announcement_id = c.lastrowid
+    # список пользователей
+    c.execute('SELECT user_id, nickname, username FROM users')
     users = c.fetchall()
+    conn.commit()
     conn.close()
-    kb = InlineKeyboardBuilder()
-    kb.add(InlineKeyboardButton(text="Да", callback_data=f"yes_{event_time}"))
-    kb.add(InlineKeyboardButton(text="Нет", callback_data=f"no_{event_time}"))
-    for uid, nick in users:
-        await bot.send_message(
-            uid, 
-            f"Готовы к Бизвару на {event_time}?",
-            reply_markup=kb.as_markup()
+    # Клавиатура для ответа
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 Готов", callback_data=f"ready_{announcement_id}"),
+            InlineKeyboardButton(text="🔴 Не готов", callback_data=f"notready_{announcement_id}")
+        ]
+    ])
+    for uid, nick, username in users:
+        await bot.send_message(uid,
+            f"📢 <b>Объявление:</b>\n{text}\n\n"
+            "Ответьте на приглашение кнопкой ниже 👇",
+            parse_mode="HTML",
+            reply_markup=kb
         )
-    await message.reply("Оповещение отправлено.")
+    await message.answer("✅ Объявление отправлено всем!", reply_markup=main_menu(True))
+    await state.clear()
 
-# --- Обработка ответов пользователей ---
-@dp.callback_query(F.data.regexp(r'(yes|no)_\d{2}:\d{2}'))
-async def handle_response(callback_query: types.CallbackQuery):
-    response, event_time = callback_query.data.split('_')
+# --- Обработка ответов на объявление ---
+@dp.callback_query(F.data.regexp(r'(ready|notready)_(\d+)'))
+async def handle_announce_response(callback_query: types.CallbackQuery):
+    response_type, announcement_id = callback_query.data.split("_")
     conn, c = db_connect()
-    c.execute('INSERT OR REPLACE INTO responses (user_id, response, event_time) VALUES (?, ?, ?)',
-              (callback_query.from_user.id, response, event_time))
+    # Получаем ник и username пользователя
+    c.execute('SELECT nickname, username FROM users WHERE user_id = ?', (callback_query.from_user.id,))
+    user = c.fetchone()
+    nickname = user[0] if user else ""
+    username = user[1] if user else callback_query.from_user.username or ""
+    c.execute(
+        'INSERT OR REPLACE INTO responses (user_id, nickname, username, response, announcement_id) VALUES (?, ?, ?, ?, ?)',
+        (callback_query.from_user.id, nickname, username, response_type, int(announcement_id))
+    )
     conn.commit()
     conn.close()
-    await callback_query.answer(f"Ответ '{response}' записан.")
+    await callback_query.answer("Спасибо, ответ принят!")
 
-# --- Команда для админа: посмотреть ответы ---
-@dp.message(Command("results"))
-async def results(message: Message):
+# --- Список участников (только для админа) ---
+@dp.message(F.text == "👥 Список участников")
+async def show_ready_list(message: Message):
     if message.from_user.id != ADMIN_ID:
-        await message.reply("Нет доступа.")
+        await message.reply("⛔ Нет доступа.")
         return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("Укажи время. Пример: /results 20:00")
-        return
-    event_time = args[1]
     conn, c = db_connect()
+    # Получаем id последнего объявления
+    c.execute('SELECT id FROM announcements ORDER BY id DESC LIMIT 1')
+    last = c.fetchone()
+    if not last:
+        await message.reply("❗ Пока не было объявлений.")
+        conn.close()
+        return
+    announcement_id = last[0]
+    # Получаем участников, кто нажал "Готов"
     c.execute('''
-        SELECT users.nickname, responses.response
+        SELECT nickname, username, user_id
         FROM responses
-        JOIN users ON responses.user_id = users.user_id
-        WHERE responses.event_time = ?
-    ''', (event_time,))
-    results = c.fetchall()
+        WHERE response = "ready" AND announcement_id = ?
+    ''', (announcement_id,))
+    users = c.fetchall()
     conn.close()
-    text = "\n".join([f"{nick}: {resp}" for nick, resp in results])
-    await message.reply(f"Результаты на {event_time}:\n{text if text else 'Нет ответов.'}")
+    if not users:
+        await message.reply("❗ Пока никто не откликнулся.")
+        return
+    text = "🟢 <b>Готовы к событию:</b>\n\n"
+    for nick, username, uid in users:
+        user_info = f"{nick} | @{username if username else uid}"
+        text += f"• {user_info}\n"
+    await message.reply(text, parse_mode="HTML")
 
 # --- Запуск бота ---
 if __name__ == "__main__":
