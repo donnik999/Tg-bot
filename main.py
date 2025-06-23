@@ -12,7 +12,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
-API_TOKEN = 'YOUR_TOKEN_HERE'  # <-- ВСТАВЬ СВОЙ ТОКЕН!
+API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'  # <-- ВСТАВЬ СВОЙ ТОКЕН!
 ADMIN_ID = 6712617550  # <-- ВСТАВЬ СВОЙ user_id
 
 bot = Bot(API_TOKEN)
