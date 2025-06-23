@@ -173,7 +173,6 @@ def main_menu(user_id):
         kb.append([KeyboardButton(text="📥 Активные объявления")])
         kb.append([KeyboardButton(text="📄 Список зарегистрированных пользователей")])
         if perms.get("can_manage_admins"): kb.append([KeyboardButton(text="⚙️ Управление администраторами")])
-    # Убрана кнопка Главное меню
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 # --- Команда /start, кнопка "Начать" ---
@@ -236,7 +235,7 @@ async def edit_nick_finish(message: Message, state: FSMContext):
     await message.answer(f"✅ Никнейм изменён на <b>{nickname}</b>!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
-# --- Сделать объявление (несколько объявлений) ---
+# --- Сделать объявление (несколько объявлений, только зарегистрированным) ---
 @dp.message(F.text == "📢 Сделать объявление")
 async def announce_start(message: Message, state: FSMContext):
     if not has_permission(message.from_user.id, "can_create_announce") and message.from_user.id != MAIN_ADMIN_ID:
@@ -251,15 +250,17 @@ async def announce_send(message: Message, state: FSMContext):
     if not text:
         await message.answer("❗ Введите текст объявления.")
         return
+
     conn, c = db_connect()
     # Записываем объявление. Статус активный.
     c.execute('INSERT INTO announcements (text, status) VALUES (?, "active")', (text,))
     announcement_id = c.lastrowid
-    # список пользователей
-    c.execute('SELECT user_id, nickname, username FROM users')
+    # Только пользователи с никнеймом (ник не NULL и не пустой)
+    c.execute('SELECT user_id, nickname, username FROM users WHERE nickname IS NOT NULL AND nickname != ""')
     users = c.fetchall()
     conn.commit()
     conn.close()
+
     # Клавиатура для ответа
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -267,17 +268,25 @@ async def announce_send(message: Message, state: FSMContext):
             InlineKeyboardButton(text="🔴 Не готов", callback_data=f"notready_{announcement_id}")
         ]
     ])
+    failed = 0
     for uid, nick, username in users:
         try:
-            await bot.send_message(uid,
+            await bot.send_message(
+                uid,
                 f"📢 <b>Объявление:</b>\n{text}\n\n"
                 "Ответьте на приглашение кнопкой ниже 👇",
                 parse_mode="HTML",
                 reply_markup=kb
             )
         except Exception as e:
+            print(f"Ошибка отправки объявы юзеру {uid}: {e}")
+            failed += 1
             continue
-    await message.answer("✅ Объявление отправлено всем!", reply_markup=main_menu(message.from_user.id))
+
+    await message.answer(
+        f"✅ Объявление отправлено всем зарегистрированным!{' (Некоторым не удалось доставить)' if failed else ''}",
+        reply_markup=main_menu(message.from_user.id)
+    )
     await state.clear()
 
 # --- Список активных объявлений и ответы участников ---
@@ -392,7 +401,7 @@ async def show_registered_users(message: Message):
         await message.reply("⛔ Нет доступа.")
         return
     conn, c = db_connect()
-    c.execute('SELECT nickname, username, user_id FROM users')
+    c.execute('SELECT nickname, username, user_id FROM users WHERE nickname IS NOT NULL AND nickname != ""')
     users = c.fetchall()
     conn.close()
     if not users:
