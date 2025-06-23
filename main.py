@@ -99,6 +99,7 @@ def admin_menu():
     kb = [
         [KeyboardButton(text="➕ Добавить админа")],
         [KeyboardButton(text="➖ Снять админа")],
+        [KeyboardButton(text="📋 Список администраторов")],  # <-- Новая кнопка
         [KeyboardButton(text="🔙 Назад")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -263,6 +264,28 @@ async def remove_admin_start(message: Message, state: FSMContext):
 @dp.message(F.text == "🔙 Назад")
 async def back_from_admin(message: Message, state: FSMContext):
     await on_start(message, state)
+
+# --- Новый функционал: список админов ---
+@dp.message(F.text == "📋 Список администраторов")
+async def list_admins(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ Нет доступа.")
+        return
+    conn, c = db_connect()
+    # Получаем все айдишники из таблицы admins И обязательно добавляем ADMIN_ID
+    c.execute("SELECT user_id FROM admins")
+    admin_ids = set(int(row[0]) for row in c.fetchall())
+    admin_ids.add(int(ADMIN_ID))
+    admin_list = []
+    for admin_id in admin_ids:
+        c.execute("SELECT nickname, username FROM users WHERE user_id = ?", (admin_id,))
+        row = c.fetchone()
+        nickname = row[0] if row and row[0] else "—"
+        username = ("@" + row[1]) if row and row[1] else "—"
+        admin_list.append(f"<b>{nickname}</b> | {username} | <code>{admin_id}</code>")
+    conn.close()
+    msg = "👮 <b>Список администраторов:</b>\n" + "\n".join(admin_list)
+    await message.answer(msg, parse_mode="HTML")
 
 @dp.message(RegStates.adding_admin)
 async def add_admin_finish(message: Message, state: FSMContext):
