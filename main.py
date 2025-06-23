@@ -1,17 +1,16 @@
+import logging
 import asyncio
 import re
 import sqlite3
 import json
-import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, Message,
-    ReplyKeyboardMarkup, KeyboardButton
-)
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher.filters import Text, Command
 
 API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
 MAIN_ADMIN_ID = 6712617550
@@ -19,24 +18,23 @@ DEPUTY_ROLE = "deputy"
 ADMIN_ROLE = "admin"
 MAIN_ADMIN_ROLE = "main_admin"
 
-bot = Bot(API_TOKEN)
-dp = Dispatcher()
+logging.basicConfig(level=logging.INFO)
 
-# FSM состояния
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+
 class RegStates(StatesGroup):
     waiting_for_nick = State()
     editing_nick = State()
     waiting_for_announce = State()
-    selecting_announce = State()
     admin_set_user = State()
     admin_set_permissions = State()
     admin_remove_user = State()
 
-# --- Работа с БД ---
 def db_connect():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    # USERS
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -44,7 +42,6 @@ def db_connect():
             username TEXT
         )
     ''')
-    # RESPONSES
     c.execute('''
         CREATE TABLE IF NOT EXISTS responses (
             user_id INTEGER,
@@ -55,7 +52,6 @@ def db_connect():
             PRIMARY KEY (user_id, announcement_id)
         )
     ''')
-    # ANNOUNCEMENTS
     c.execute('''
         CREATE TABLE IF NOT EXISTS announcements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +59,6 @@ def db_connect():
             status TEXT DEFAULT 'active'
         )
     ''')
-    # ADMINS (user_id, role, permissions (json))
     c.execute('''
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY,
@@ -77,7 +72,6 @@ def db_connect():
 def is_valid_nick(nick):
     return bool(re.fullmatch(r'[A-Za-z0-9]+_[A-Za-z0-9]+', nick))
 
-# --- Админка ---
 DEFAULT_PERMISSIONS = {
     MAIN_ADMIN_ROLE: {
         "can_create_announce": True,
@@ -162,40 +156,37 @@ def main_menu(user_id):
     is_admin = role is not None or user_id == MAIN_ADMIN_ID
 
     kb = [
-        [KeyboardButton(text="🚀 Начать")],
-        [KeyboardButton(text="📝 Регистрация")],
-        [KeyboardButton(text="✏️ Редактировать никнейм")]
+        [KeyboardButton("🚀 Начать")],
+        [KeyboardButton("📝 Регистрация")],
+        [KeyboardButton("✏️ Редактировать никнейм")]
     ]
     if is_admin:
-        if perms.get("can_create_announce"): kb.append([KeyboardButton(text="📢 Сделать объявление")])
-        kb.append([KeyboardButton(text="📥 Активные объявления")])
-        kb.append([KeyboardButton(text="📄 Список зарегистрированных пользователей")])
-        if perms.get("can_manage_admins"): kb.append([KeyboardButton(text="⚙️ Управление администраторами")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+        if perms.get("can_create_announce"): kb.append([KeyboardButton("📢 Сделать объявление")])
+        kb.append([KeyboardButton("📥 Активные объявления")])
+        kb.append([KeyboardButton("📄 Список зарегистрированных пользователей")])
+        if perms.get("can_manage_admins"): kb.append([KeyboardButton("⚙️ Управление администраторами")])
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
-# --- Хендлеры ---
-@dp.message(Command("start"))
-@dp.message(F.text == "🚀 Начать")
-async def send_welcome(message: Message, state: FSMContext):
-    await state.clear()
+@dp.message_handler(commands=["start"])
+@dp.message_handler(lambda m: m.text == "🚀 Начать")
+async def send_welcome(message: types.Message, state: FSMContext):
+    await state.finish()
     await message.answer(
         "👋 Привет!\n\n"
         "Ты попал в бота для выбора участников БизВара ⚔️🏆\n"
         "Используй кнопки ниже ⬇️",
-        reply_markup=main_menu(message.from_user.id),
-        parse_mode="HTML"
+        reply_markup=main_menu(message.from_user.id)
     )
 
-@dp.message(F.text == "📝 Регистрация")
-async def registration_start(message: Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "📝 Регистрация")
+async def registration_start(message: types.Message, state: FSMContext):
     await message.answer(
-        "✍️ Придумай себе никнейм в формате <b>Имя_Фамилия</b> (только латиница, знак подчеркивания _ обязательно).\n\nВведи свой никнейм сообщением:",
-        parse_mode="HTML"
+        "✍️ Придумай себе никнейм в формате Имя_Фамилия (только латиница, знак подчеркивания _ обязательно).\n\nВведи свой никнейм сообщением:"
     )
-    await state.set_state(RegStates.waiting_for_nick)
+    await RegStates.waiting_for_nick.set()
 
-@dp.message(RegStates.waiting_for_nick)
-async def registration_finish(message: Message, state: FSMContext):
+@dp.message_handler(state=RegStates.waiting_for_nick)
+async def registration_finish(message: types.Message, state: FSMContext):
     nickname = message.text.strip()
     if not is_valid_nick(nickname):
         await message.answer("❌ Никнейм должен быть на английском и содержать '_' (например: Sander_Kligan). Попробуй ещё раз:")
@@ -205,22 +196,21 @@ async def registration_finish(message: Message, state: FSMContext):
               (message.from_user.id, nickname, message.from_user.username or ""))
     conn.commit()
     conn.close()
-    await message.answer(f"✅ Никнейм <b>{nickname}</b> успешно зарегистрирован!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id))
-    await state.clear()
+    await message.answer(f"✅ Никнейм {nickname} успешно зарегистрирован!", reply_markup=main_menu(message.from_user.id))
+    await state.finish()
 
-@dp.message(F.text == "✏️ Редактировать никнейм")
-async def edit_nick_start(message: Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "✏️ Редактировать никнейм")
+async def edit_nick_start(message: types.Message, state: FSMContext):
     if not has_permission(message.from_user.id, "can_edit_nick") and message.from_user.id != MAIN_ADMIN_ID:
         await message.answer("⛔ Нет доступа.")
         return
     await message.answer(
-        "🔄 Введи новый никнейм в формате <b>Имя_Фамилия</b> (только латиница, знак _ обязательно):",
-        parse_mode="HTML"
+        "🔄 Введи новый никнейм в формате Имя_Фамилия (только латиница, знак _ обязательно):"
     )
-    await state.set_state(RegStates.editing_nick)
+    await RegStates.editing_nick.set()
 
-@dp.message(RegStates.editing_nick)
-async def edit_nick_finish(message: Message, state: FSMContext):
+@dp.message_handler(state=RegStates.editing_nick)
+async def edit_nick_finish(message: types.Message, state: FSMContext):
     nickname = message.text.strip()
     if not is_valid_nick(nickname):
         await message.answer("❌ Никнейм должен быть на английском и содержать '_' (например: Sander_Kligan). Попробуй ещё раз:")
@@ -229,23 +219,24 @@ async def edit_nick_finish(message: Message, state: FSMContext):
     c.execute('UPDATE users SET nickname = ?, username = ? WHERE user_id = ?', (nickname, message.from_user.username or "", message.from_user.id))
     conn.commit()
     conn.close()
-    await message.answer(f"✅ Никнейм изменён на <b>{nickname}</b>!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id))
-    await state.clear()
+    await message.answer(f"✅ Никнейм изменён на {nickname}!", reply_markup=main_menu(message.from_user.id))
+    await state.finish()
 
-@dp.message(F.text == "📢 Сделать объявление")
-async def announce_start(message: Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "📢 Сделать объявление")
+async def announce_start(message: types.Message, state: FSMContext):
     if not has_permission(message.from_user.id, "can_create_announce") and message.from_user.id != MAIN_ADMIN_ID:
         await message.reply("⛔ Нет доступа.")
         return
     await message.answer("📝 Введите текст объявления для всех участников:")
-    await state.set_state(RegStates.waiting_for_announce)
+    await RegStates.waiting_for_announce.set()
 
-@dp.message(RegStates.waiting_for_announce)
-async def announce_send(message: Message, state: FSMContext):
+@dp.message_handler(state=RegStates.waiting_for_announce)
+async def announce_send(message: types.Message, state: FSMContext):
     text = message.text.strip()
     if not text:
         await message.answer("❗ Введите текст объявления.")
         return
+
     conn, c = db_connect()
     c.execute('INSERT INTO announcements (text, status) VALUES (?, "active")', (text,))
     announcement_id = c.lastrowid
@@ -253,20 +244,17 @@ async def announce_send(message: Message, state: FSMContext):
     users = c.fetchall()
     conn.commit()
     conn.close()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🟢 Готов", callback_data=f"ready_{announcement_id}"),
-            InlineKeyboardButton(text="🔴 Не готов", callback_data=f"notready_{announcement_id}")
-        ]
-    ])
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🟢 Готов", callback_data=f"ready_{announcement_id}"),
+        InlineKeyboardButton("🔴 Не готов", callback_data=f"notready_{announcement_id}")
+    )
     failed = 0
     for uid, nick, username in users:
         try:
             await bot.send_message(
                 uid,
-                f"📢 <b>Объявление:</b>\n{text}\n\n"
-                "Ответьте на приглашение кнопкой ниже 👇",
-                parse_mode="HTML",
+                f"📢 Объявление:\n{text}\n\nОтветьте на приглашение кнопкой ниже 👇",
                 reply_markup=kb
             )
         except Exception as e:
@@ -277,10 +265,10 @@ async def announce_send(message: Message, state: FSMContext):
         f"✅ Объявление отправлено всем зарегистрированным!{' (Некоторым не удалось доставить)' if failed else ''}",
         reply_markup=main_menu(message.from_user.id)
     )
-    await state.clear()
+    await state.finish()
 
-@dp.message(F.text == "📥 Активные объявления")
-async def show_active_announcements(message: Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "📥 Активные объявления")
+async def show_active_announcements(message: types.Message):
     role = get_admin_role(message.from_user.id)
     if role is None and message.from_user.id != MAIN_ADMIN_ID:
         await message.answer("⛔ Нет доступа.")
@@ -292,13 +280,13 @@ async def show_active_announcements(message: Message, state: FSMContext):
     if not announces:
         await message.answer("❗ Сейчас нет активных объявлений.")
         return
-    kb = InlineKeyboardBuilder()
+    kb = InlineKeyboardMarkup(row_width=1)
     for ann_id, text in announces:
-        kb.button(text=f"Объявление #{ann_id}", callback_data=f"show_announce_{ann_id}")
-    await message.answer("Выберите объявление:", reply_markup=kb.as_markup())
+        kb.add(InlineKeyboardButton(f"Объявление #{ann_id}", callback_data=f"show_announce_{ann_id}"))
+    await message.answer("Выберите объявление:", reply_markup=kb)
 
-@dp.callback_query(F.data.regexp(r'show_announce_(\d+)'))
-async def show_announce_users(call: types.CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda call: call.data.startswith("show_announce_"))
+async def show_announce_users(call: types.CallbackQuery):
     ann_id = int(call.data.split("_")[-1])
     conn, c = db_connect()
     c.execute('SELECT text, status FROM announcements WHERE id=?', (ann_id,))
@@ -316,66 +304,36 @@ async def show_announce_users(call: types.CallbackQuery, state: FSMContext):
     conn.close()
     ready = [f"{n}|@{u if u else uid}" for n,u,uid,r in users if r=="ready"]
     not_ready = [f"{n}|@{u if u else uid}" for n,u,uid,r in users if r=="notready"]
-    msg = f"📢 <b>Объявление:</b> {text}\nСтатус: <b>{status}</b>\n\n"
-    msg += "🟢 <b>Готовы:</b>\n" + "\n".join(f"• {x}" for x in ready) if ready else "🟢 Готовых нет.\n"
-    msg += "\n\n🔴 <b>Не готовы:</b>\n" + "\n".join(f"• {x}" for x in not_ready) if not_ready else "\n\n🔴 Нет откликов 'не готов'."
-    kb = InlineKeyboardBuilder()
-    if has_permission(call.from_user.id, "can_close_announce") and status == "active":
-        kb.button(text="❌ Закрыть объявление", callback_data=f"close_announce_{ann_id}")
-    if has_permission(call.from_user.id, "can_open_announce") and status == "closed":
-        kb.button(text="🔓 Открыть объявление", callback_data=f"open_announce_{ann_id}")
-    if has_permission(call.from_user.id, "can_delete_announce"):
-        kb.button(text="🗑 Удалить объявление", callback_data=f"delete_announce_{ann_id}")
-    await call.message.answer(msg, parse_mode="HTML", reply_markup=kb.as_markup() if kb.buttons else None)
+    msg = f"📢 Объявление: {text}\nСтатус: {status}\n\n"
+    msg += "🟢 Готовы:\n" + "\n".join(f"• {x}" for x in ready) if ready else "🟢 Готовых нет.\n"
+    msg += "\n\n🔴 Не готовы:\n" + "\n".join(f"• {x}" for x in not_ready) if not_ready else "\n\n🔴 Нет откликов 'не готов'."
+    kb = InlineKeyboardMarkup(row_width=1)
+    await call.message.answer(msg, reply_markup=kb)
     await call.answer()
 
-@dp.callback_query(F.data.regexp(r'(close|open|delete)_announce_(\d+)'))
-async def manage_announce_status(call: types.CallbackQuery, state: FSMContext):
-    action, ann_id = call.data.split("_")[0], int(call.data.split("_")[-1])
-    if action == "close" and not has_permission(call.from_user.id, "can_close_announce"):
-        await call.answer("Нет права закрывать", show_alert=True)
-        return
-    if action == "open" and not has_permission(call.from_user.id, "can_open_announce"):
-        await call.answer("Нет права открывать", show_alert=True)
-        return
-    if action == "delete" and not has_permission(call.from_user.id, "can_delete_announce"):
-        await call.answer("Нет права удалять", show_alert=True)
-        return
-    conn, c = db_connect()
-    if action in ["close", "open"]:
-        new_status = "closed" if action == "close" else "active"
-        c.execute('UPDATE announcements SET status = ? WHERE id = ?', (new_status, ann_id))
-    elif action == "delete":
-        c.execute('DELETE FROM announcements WHERE id = ?', (ann_id,))
-        c.execute('DELETE FROM responses WHERE announcement_id = ?', (ann_id,))
-    conn.commit()
-    conn.close()
-    await call.answer("Готово!", show_alert=True)
-    await call.message.delete()
-
-@dp.callback_query(F.data.regexp(r'(ready|notready)_(\d+)'))
-async def handle_announce_response(callback_query: types.CallbackQuery, state: FSMContext):
-    response_type, announcement_id = callback_query.data.split("_")
+@dp.callback_query_handler(lambda call: call.data.startswith("ready_") or call.data.startswith("notready_"))
+async def handle_announce_response(call: types.CallbackQuery):
+    response_type, announcement_id = call.data.split("_")
     conn, c = db_connect()
     c.execute('SELECT status FROM announcements WHERE id=?', (announcement_id,))
     ann = c.fetchone()
     if not ann or ann[0] != "active":
-        await callback_query.answer("Объявление не активно", show_alert=True)
+        await call.answer("Объявление не активно", show_alert=True)
         return
-    c.execute('SELECT nickname, username FROM users WHERE user_id = ?', (callback_query.from_user.id,))
+    c.execute('SELECT nickname, username FROM users WHERE user_id = ?', (call.from_user.id,))
     user = c.fetchone()
     nickname = user[0] if user else ""
-    username = user[1] if user else callback_query.from_user.username or ""
+    username = user[1] if user else call.from_user.username or ""
     c.execute(
         'INSERT OR REPLACE INTO responses (user_id, nickname, username, response, announcement_id) VALUES (?, ?, ?, ?, ?)',
-        (callback_query.from_user.id, nickname, username, response_type, int(announcement_id))
+        (call.from_user.id, nickname, username, response_type, int(announcement_id))
     )
     conn.commit()
     conn.close()
-    await callback_query.answer("Спасибо, ответ принят!")
+    await call.answer("Спасибо, ответ принят!")
 
-@dp.message(F.text == "📄 Список зарегистрированных пользователей")
-async def show_registered_users(message: Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "📄 Список зарегистрированных пользователей")
+async def show_registered_users(message: types.Message):
     role = get_admin_role(message.from_user.id)
     if role is None and message.from_user.id != MAIN_ADMIN_ID:
         await message.reply("⛔ Нет доступа.")
@@ -387,18 +345,16 @@ async def show_registered_users(message: Message, state: FSMContext):
     if not users:
         await message.reply("❗ Нет зарегистрированных пользователей.")
         return
-    text = "<b>Список зарегистрированных пользователей:</b>\n\n"
+    text = "Список зарегистрированных пользователей:\n\n"
     for nick, username, uid in users:
         user_info = f"{nick} | @{username if username else uid}"
         text += f"• {user_info}\n"
-    await message.reply(text, parse_mode="HTML")
+    await message.reply(text)
 
-# --- Запуск бота ---
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     conn, c = db_connect()
     c.execute('SELECT * FROM admins WHERE user_id=?', (MAIN_ADMIN_ID,))
     if not c.fetchone():
         set_admin(MAIN_ADMIN_ID, MAIN_ADMIN_ROLE, DEFAULT_PERMISSIONS[MAIN_ADMIN_ROLE])
     conn.close()
-    asyncio.run(dp.start_polling(bot)) 2
+    executor.start_polling(dp, skip_updates=True)
