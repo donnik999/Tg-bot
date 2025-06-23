@@ -53,7 +53,7 @@ def db_connect():
     return conn, c
 
 def is_admin(user_id):
-    if user_id == ADMIN_ID:
+    if int(user_id) == int(ADMIN_ID):
         return True
     conn, c = db_connect()
     c.execute('SELECT user_id FROM admins WHERE user_id=?', (user_id,))
@@ -68,7 +68,7 @@ def add_admin(user_id):
     conn.close()
 
 def remove_admin(user_id):
-    if user_id == ADMIN_ID:
+    if int(user_id) == int(ADMIN_ID):
         return
     conn, c = db_connect()
     c.execute('DELETE FROM admins WHERE user_id=?', (user_id,))
@@ -124,14 +124,13 @@ def announcements_pagination_kb(page, total, ann_id, is_admin=False):
         rows.append(btns)
     if is_admin:
         rows.append([InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"ann_del_{ann_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # --- Handlers ---
 
 @dp.message(Command("start"))
 async def on_start(message: Message, state: FSMContext):
     await state.clear()
-    # Welcome picture and text
     photo = FSInputFile("welcome.jpg")
     await message.answer_photo(
         photo,
@@ -318,14 +317,12 @@ async def ann_create_finish(message: Message, state: FSMContext):
     title = data.get("title")
     text = message.text.strip()
     conn, c = db_connect()
-    # Создаём объявление
     c.execute(
         "INSERT INTO announcements (title, text, creator_id, created_at) VALUES (?, ?, ?, ?)",
         (title, text, message.from_user.id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     )
     ann_id = c.lastrowid
     conn.commit()
-    # Получить всех пользователей с никнеймом (только тех, кто виден в "Список игроков")
     c.execute("SELECT user_id, nickname, username FROM users WHERE nickname IS NOT NULL AND nickname != ''")
     user_rows = c.fetchall()
     user_ids = set()
@@ -333,9 +330,7 @@ async def ann_create_finish(message: Message, state: FSMContext):
     for user_id, nickname, username in user_rows:
         user_ids.add(user_id)
         user_info.append((user_id, nickname, username))
-    # В рассылку обязательно включаем автора (админа)
     user_ids.add(message.from_user.id)
-    # Рассылка
     sent = []
     failed = []
     for user_id in user_ids:
@@ -350,7 +345,6 @@ async def ann_create_finish(message: Message, state: FSMContext):
             sent.append(user_id)
         except Exception:
             failed.append(user_id)
-    # Статистика
     c.execute("SELECT COUNT(*) FROM users")
     total_users = c.fetchone()[0] or 0
     c.execute("SELECT COUNT(*) FROM users WHERE nickname IS NOT NULL AND nickname != ''")
@@ -459,18 +453,15 @@ async def ann_delete_callback(call: types.CallbackQuery):
         return
     ann_id = int(call.data.split("_")[-1])
     conn, c = db_connect()
-    # Удаляем объявление и все ответы к нему
     c.execute("DELETE FROM announcements WHERE id=?", (ann_id,))
     c.execute("DELETE FROM announcement_responses WHERE announcement_id=?", (ann_id,))
     conn.commit()
-    # Узнаём сколько объявлений осталось
     c.execute("SELECT COUNT(*) FROM announcements")
     total = c.fetchone()[0]
     conn.close()
     if total == 0:
         await call.message.edit_text("Нет объявлений.", parse_mode="HTML")
     else:
-        # После удаления показываем предыдущую страницу (или первую)
         page = 1
         await show_announcement_participants(call.message, page, total)
     await call.answer("Объявление удалено!", show_alert=True)
