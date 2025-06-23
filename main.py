@@ -2,6 +2,7 @@ import asyncio
 import re
 import sqlite3
 import json
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -13,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
-MAIN_ADMIN_ID = 6712617550  # Главный админ
+MAIN_ADMIN_ID = 6712617550
 DEPUTY_ROLE = "deputy"
 ADMIN_ROLE = "admin"
 MAIN_ADMIN_ROLE = "main_admin"
@@ -77,8 +78,6 @@ def is_valid_nick(nick):
     return bool(re.fullmatch(r'[A-Za-z0-9]+_[A-Za-z0-9]+', nick))
 
 # --- Админка ---
-
-# Права по-умолчанию для ролей
 DEFAULT_PERMISSIONS = {
     MAIN_ADMIN_ROLE: {
         "can_create_announce": True,
@@ -157,7 +156,6 @@ def remove_admin(user_id):
     conn.commit()
     conn.close()
 
-# --- Главное меню ---
 def main_menu(user_id):
     role = get_admin_role(user_id)
     perms = get_admin_permissions(user_id)
@@ -175,10 +173,11 @@ def main_menu(user_id):
         if perms.get("can_manage_admins"): kb.append([KeyboardButton(text="⚙️ Управление администраторами")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- Команда /start, кнопка "Начать" ---
+# --- Хендлеры ---
 @dp.message(Command("start"))
 @dp.message(F.text == "🚀 Начать")
-async def send_welcome(message: Message):
+async def send_welcome(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer(
         "👋 Привет!\n\n"
         "Ты попал в бота для выбора участников БизВара ⚔️🏆\n"
@@ -187,7 +186,6 @@ async def send_welcome(message: Message):
         parse_mode="HTML"
     )
 
-# --- Регистрация ---
 @dp.message(F.text == "📝 Регистрация")
 async def registration_start(message: Message, state: FSMContext):
     await message.answer(
@@ -210,7 +208,6 @@ async def registration_finish(message: Message, state: FSMContext):
     await message.answer(f"✅ Никнейм <b>{nickname}</b> успешно зарегистрирован!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
-# --- Редактировать никнейм ---
 @dp.message(F.text == "✏️ Редактировать никнейм")
 async def edit_nick_start(message: Message, state: FSMContext):
     if not has_permission(message.from_user.id, "can_edit_nick") and message.from_user.id != MAIN_ADMIN_ID:
@@ -235,7 +232,6 @@ async def edit_nick_finish(message: Message, state: FSMContext):
     await message.answer(f"✅ Никнейм изменён на <b>{nickname}</b>!", parse_mode="HTML", reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
-# --- Сделать объявление (несколько объявлений, только зарегистрированным) ---
 @dp.message(F.text == "📢 Сделать объявление")
 async def announce_start(message: Message, state: FSMContext):
     if not has_permission(message.from_user.id, "can_create_announce") and message.from_user.id != MAIN_ADMIN_ID:
@@ -250,18 +246,13 @@ async def announce_send(message: Message, state: FSMContext):
     if not text:
         await message.answer("❗ Введите текст объявления.")
         return
-
     conn, c = db_connect()
-    # Записываем объявление. Статус активный.
     c.execute('INSERT INTO announcements (text, status) VALUES (?, "active")', (text,))
     announcement_id = c.lastrowid
-    # Только пользователи с никнеймом (ник не NULL и не пустой)
     c.execute('SELECT user_id, nickname, username FROM users WHERE nickname IS NOT NULL AND nickname != ""')
     users = c.fetchall()
     conn.commit()
     conn.close()
-
-    # Клавиатура для ответа
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🟢 Готов", callback_data=f"ready_{announcement_id}"),
@@ -282,14 +273,12 @@ async def announce_send(message: Message, state: FSMContext):
             print(f"Ошибка отправки объявы юзеру {uid}: {e}")
             failed += 1
             continue
-
     await message.answer(
         f"✅ Объявление отправлено всем зарегистрированным!{' (Некоторым не удалось доставить)' if failed else ''}",
         reply_markup=main_menu(message.from_user.id)
     )
     await state.clear()
 
-# --- Список активных объявлений и ответы участников ---
 @dp.message(F.text == "📥 Активные объявления")
 async def show_active_announcements(message: Message, state: FSMContext):
     role = get_admin_role(message.from_user.id)
@@ -308,19 +297,16 @@ async def show_active_announcements(message: Message, state: FSMContext):
         kb.button(text=f"Объявление #{ann_id}", callback_data=f"show_announce_{ann_id}")
     await message.answer("Выберите объявление:", reply_markup=kb.as_markup())
 
-# --- Просмотр откликов на объявление (админ) ---
 @dp.callback_query(F.data.regexp(r'show_announce_(\d+)'))
-async def show_announce_users(call: types.CallbackQuery):
+async def show_announce_users(call: types.CallbackQuery, state: FSMContext):
     ann_id = int(call.data.split("_")[-1])
     conn, c = db_connect()
-    # Получить текст объявления
     c.execute('SELECT text, status FROM announcements WHERE id=?', (ann_id,))
     ann = c.fetchone()
     if not ann:
         await call.answer("Объявление не найдено", show_alert=True)
         return
     text, status = ann
-    # Получить ответы
     c.execute('''
         SELECT nickname, username, user_id, response
         FROM responses
@@ -333,7 +319,6 @@ async def show_announce_users(call: types.CallbackQuery):
     msg = f"📢 <b>Объявление:</b> {text}\nСтатус: <b>{status}</b>\n\n"
     msg += "🟢 <b>Готовы:</b>\n" + "\n".join(f"• {x}" for x in ready) if ready else "🟢 Готовых нет.\n"
     msg += "\n\n🔴 <b>Не готовы:</b>\n" + "\n".join(f"• {x}" for x in not_ready) if not_ready else "\n\n🔴 Нет откликов 'не готов'."
-    # Кнопки управления
     kb = InlineKeyboardBuilder()
     if has_permission(call.from_user.id, "can_close_announce") and status == "active":
         kb.button(text="❌ Закрыть объявление", callback_data=f"close_announce_{ann_id}")
@@ -344,9 +329,8 @@ async def show_announce_users(call: types.CallbackQuery):
     await call.message.answer(msg, parse_mode="HTML", reply_markup=kb.as_markup() if kb.buttons else None)
     await call.answer()
 
-# --- Закрытие/открытие/удаление объявления ---
 @dp.callback_query(F.data.regexp(r'(close|open|delete)_announce_(\d+)'))
-async def manage_announce_status(call: types.CallbackQuery):
+async def manage_announce_status(call: types.CallbackQuery, state: FSMContext):
     action, ann_id = call.data.split("_")[0], int(call.data.split("_")[-1])
     if action == "close" and not has_permission(call.from_user.id, "can_close_announce"):
         await call.answer("Нет права закрывать", show_alert=True)
@@ -369,18 +353,15 @@ async def manage_announce_status(call: types.CallbackQuery):
     await call.answer("Готово!", show_alert=True)
     await call.message.delete()
 
-# --- Обработка ответов на объявление ---
 @dp.callback_query(F.data.regexp(r'(ready|notready)_(\d+)'))
-async def handle_announce_response(callback_query: types.CallbackQuery):
+async def handle_announce_response(callback_query: types.CallbackQuery, state: FSMContext):
     response_type, announcement_id = callback_query.data.split("_")
     conn, c = db_connect()
-    # Проверка что объявление активно
     c.execute('SELECT status FROM announcements WHERE id=?', (announcement_id,))
     ann = c.fetchone()
     if not ann or ann[0] != "active":
         await callback_query.answer("Объявление не активно", show_alert=True)
         return
-    # Получаем ник и username пользователя
     c.execute('SELECT nickname, username FROM users WHERE user_id = ?', (callback_query.from_user.id,))
     user = c.fetchone()
     nickname = user[0] if user else ""
@@ -393,9 +374,8 @@ async def handle_announce_response(callback_query: types.CallbackQuery):
     conn.close()
     await callback_query.answer("Спасибо, ответ принят!")
 
-# --- Список всех зарегистрированных пользователей (только для админа) ---
 @dp.message(F.text == "📄 Список зарегистрированных пользователей")
-async def show_registered_users(message: Message):
+async def show_registered_users(message: Message, state: FSMContext):
     role = get_admin_role(message.from_user.id)
     if role is None and message.from_user.id != MAIN_ADMIN_ID:
         await message.reply("⛔ Нет доступа.")
@@ -413,180 +393,12 @@ async def show_registered_users(message: Message):
         text += f"• {user_info}\n"
     await message.reply(text, parse_mode="HTML")
 
-# --- Управление администраторами (главный и зам) ---
-@dp.message(F.text == "⚙️ Управление администраторами")
-async def admin_management(message: Message, state: FSMContext):
-    role = get_admin_role(message.from_user.id)
-    if not has_permission(message.from_user.id, "can_manage_admins"):
-        await message.answer("⛔ Нет доступа.")
-        return
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Добавить админа", callback_data="admin_add")
-    kb.button(text="Удалить админа", callback_data="admin_remove")
-    kb.button(text="Изменить права", callback_data="admin_setperm")
-    await message.answer("Управление администраторами:", reply_markup=kb.as_markup())
-
-# --- Обработка кнопок админки ---
-@dp.callback_query(F.data == "admin_add")
-async def admin_add_start(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Введи user_id или @username пользователя, которого хочешь сделать админом, и его роль (admin/deputy):\nПример: 123456789 admin")
-    await state.set_state(RegStates.admin_set_user)
-    await call.answer()
-
-@dp.message(RegStates.admin_set_user)
-async def admin_add_process(message: Message, state: FSMContext):
-    try:
-        parts = message.text.strip().split()
-        user = parts[0]
-        role = parts[1].lower()
-        user_id = int(user) if user.isdigit() else None
-        if not user_id and user.startswith("@"):
-            conn, c = db_connect()
-            c.execute('SELECT user_id FROM users WHERE username=?', (user[1:],))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Пользователь не найден.")
-                await state.clear()
-                return
-            user_id = row[0]
-        if role not in [ADMIN_ROLE, DEPUTY_ROLE]:
-            await message.answer("Роль должна быть admin или deputy.")
-            await state.clear()
-            return
-        set_admin(user_id, role)
-        await message.answer("✅ Админ назначен.")
-    except Exception as e:
-        await message.answer("Ошибка! Проверь ввод.")
-    await state.clear()
-
-@dp.callback_query(F.data == "admin_remove")
-async def admin_remove_start(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Введи user_id или @username пользователя, у которого забрать права администратора:")
-    await state.set_state(RegStates.admin_remove_user)
-    await call.answer()
-
-@dp.message(RegStates.admin_remove_user)
-async def admin_remove_process(message: Message, state: FSMContext):
-    try:
-        user = message.text.strip()
-        user_id = int(user) if user.isdigit() else None
-        if not user_id and user.startswith("@"):
-            conn, c = db_connect()
-            c.execute('SELECT user_id FROM users WHERE username=?', (user[1:],))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Пользователь не найден.")
-                await state.clear()
-                return
-            user_id = row[0]
-        remove_admin(user_id)
-        await message.answer("✅ Права администратора сняты.")
-    except Exception as e:
-        await message.answer("Ошибка! Проверь ввод.")
-    await state.clear()
-
-@dp.callback_query(F.data == "admin_setperm")
-async def admin_setperm_start(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer(
-        "Введи user_id или @username и список прав через пробел (например: can_create_announce can_kick ...):\n"
-        "Пример: 123456789 can_create_announce can_kick"
-    )
-    await state.set_state(RegStates.admin_set_permissions)
-    await call.answer()
-
-@dp.message(RegStates.admin_set_permissions)
-async def admin_setperm_process(message: Message, state: FSMContext):
-    try:
-        parts = message.text.strip().split()
-        user = parts[0]
-        user_id = int(user) if user.isdigit() else None
-        if not user_id and user.startswith("@"):
-            conn, c = db_connect()
-            c.execute('SELECT user_id FROM users WHERE username=?', (user[1:],))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Пользователь не найден.")
-                await state.clear()
-                return
-            user_id = row[0]
-        # Разрешения
-        allowed_perms = [
-            "can_create_announce", "can_delete_announce", "can_close_announce", "can_open_announce",
-            "can_kick", "can_edit_nick", "can_delete_nick", "can_manage_admins"
-        ]
-        perms = {k: False for k in allowed_perms}
-        for perm in parts[1:]:
-            if perm in allowed_perms:
-                perms[perm] = True
-        role = get_admin_role(user_id) or ADMIN_ROLE
-        set_admin(user_id, role, permissions=perms)
-        await message.answer("✅ Права обновлены.")
-    except Exception as e:
-        await message.answer("Ошибка! Проверь ввод.")
-    await state.clear()
-
-# --- Кик и удаление/редактирование ника (по правам) ---
-@dp.message(Command("kick"))
-async def kick_user(message: Message):
-    if not has_permission(message.from_user.id, "can_kick"):
-        await message.reply("⛔ Нет права кикать.")
-        return
-    args = message.get_args()
-    user_id = int(args) if args.isdigit() else None
-    if not user_id:
-        await message.reply("Укажи user_id.")
-        return
-    conn, c = db_connect()
-    c.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    await message.reply(f"Пользователь {user_id} удалён.")
-
-@dp.message(Command("delnick"))
-async def delnick_user(message: Message):
-    if not has_permission(message.from_user.id, "can_delete_nick"):
-        await message.reply("⛔ Нет права удалять ник.")
-        return
-    args = message.get_args()
-    user_id = int(args) if args.isdigit() else None
-    if not user_id:
-        await message.reply("Укажи user_id.")
-        return
-    conn, c = db_connect()
-    c.execute('UPDATE users SET nickname=NULL WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    await message.reply(f"Ник пользователя {user_id} удалён.")
-
-@dp.message(Command("editnick"))
-async def editnick_user(message: Message):
-    if not has_permission(message.from_user.id, "can_edit_nick"):
-        await message.reply("⛔ Нет права менять ник.")
-        return
-    args = message.get_args().split()
-    if len(args) != 2:
-        await message.reply("Используй: /editnick user_id Новый_Ник")
-        return
-    user_id = int(args[0])
-    new_nick = args[1]
-    if not is_valid_nick(new_nick):
-        await message.reply("Никнейм должен быть в формате Имя_Фамилия (латиница, _).")
-        return
-    conn, c = db_connect()
-    c.execute('UPDATE users SET nickname=? WHERE user_id=?', (new_nick, user_id))
-    conn.commit()
-    conn.close()
-    await message.reply(f"Ник пользователя {user_id} изменён на {new_nick}.")
-
 # --- Запуск бота ---
 if __name__ == "__main__":
-    # При первом запуске добавить себя как главного админа, если не существует
+    logging.basicConfig(level=logging.INFO)
     conn, c = db_connect()
     c.execute('SELECT * FROM admins WHERE user_id=?', (MAIN_ADMIN_ID,))
     if not c.fetchone():
         set_admin(MAIN_ADMIN_ID, MAIN_ADMIN_ROLE, DEFAULT_PERMISSIONS[MAIN_ADMIN_ROLE])
     conn.close()
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(dp.start_polling(bot)) 2
