@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from datetime import datetime
 
-API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'  # <-- ВСТАВЬ СЮДА СВОЙ ТОКЕН!
+API_TOKEN = 'YOUR_TOKEN_HERE'  # <-- ВСТАВЬ СЮДА СВОЙ ТОКЕН!
 ADMIN_ID = 6712617550  # <-- ВСТАВЬ СЮДА СВОЙ user_id!
 
 bot = Bot(API_TOKEN)
@@ -320,14 +320,20 @@ async def ann_create_finish(message: Message, state: FSMContext):
     )
     ann_id = c.lastrowid
     conn.commit()
-    # Получить всех пользователей с никнеймом и всех админов
-    c.execute("SELECT user_id FROM users WHERE nickname IS NOT NULL AND nickname != ''")
-    user_ids = set(user_id for (user_id,) in c.fetchall())
-    c.execute("SELECT user_id FROM admins")
-    admin_ids = set(user_id for (user_id,) in c.fetchall())
-    all_recipients = user_ids | admin_ids
-    count = 0
-    for user_id in all_recipients:
+    # Получить всех пользователей с никнеймом (только тех, кто виден в "Список игроков")
+    c.execute("SELECT user_id, nickname, username FROM users WHERE nickname IS NOT NULL AND nickname != ''")
+    user_rows = c.fetchall()
+    user_ids = set()
+    user_info = []
+    for user_id, nickname, username in user_rows:
+        user_ids.add(user_id)
+        user_info.append((user_id, nickname, username))
+    # В рассылку обязательно включаем автора (админа)
+    user_ids.add(message.from_user.id)
+    # Рассылка
+    sent = []
+    failed = []
+    for user_id in user_ids:
         try:
             await bot.send_message(
                 user_id,
@@ -336,19 +342,29 @@ async def ann_create_finish(message: Message, state: FSMContext):
                 parse_mode="HTML",
                 reply_markup=announcement_response_kb(ann_id)
             )
-            count += 1
+            sent.append(user_id)
         except Exception:
-            pass
-    if count == 0:
-        await message.answer(
-            "Объявление создано, но нет пользователей с никнеймами или админов для рассылки.",
-            reply_markup=main_menu(is_admin=True)
-        )
-    else:
-        await message.answer(
-            f"✅ Объявление успешно отправлено {count} пользователям!",
-            reply_markup=main_menu(is_admin=True)
-        )
+            failed.append(user_id)
+    # Статистика
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0] or 0
+    c.execute("SELECT COUNT(*) FROM users WHERE nickname IS NOT NULL AND nickname != ''")
+    users_with_nick = c.fetchone()[0] or 0
+    stats = (f"📊 <b>Статистика рассылки:</b>\n"
+             f"Всего пользователей: <b>{total_users}</b>\n"
+             f"Зарегистрированы с ником: <b>{users_with_nick}</b>\n"
+             f"Всего отправлено: <b>{len(sent)}</b>\n"
+             f"Получили объявление:\n" +
+             "\n".join([f"<code>{uid}</code>" + 
+                        (f" ({nick} @{uname})" if (uid, nick, uname) in user_info else (" (вы)" if uid == message.from_user.id else ""))
+                        for uid in sent]))
+    if failed:
+        stats += "\n\n🚫 Не доставлено:\n" + "\n".join([f"<code>{uid}</code>" for uid in failed])
+    await message.answer(
+        f"✅ Объявление создано и разослано!\n\n{stats}",
+        parse_mode="HTML",
+        reply_markup=main_menu(is_admin=True)
+    )
     conn.close()
     await state.clear()
 
