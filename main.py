@@ -123,15 +123,13 @@ def main_menu(is_admin=False):
         kb.append([KeyboardButton(text="👥 Список участников")])
         kb.append([KeyboardButton(text="📄 Список зарегистрированных пользователей")])
         kb.append([KeyboardButton(text="🛠 Админ-панель")])
-    kb.append([KeyboardButton(text="🏠 Главное меню")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)  # << УБРАЛ КНОПКУ "🏠 Главное меню"
 
 def cancel_menu():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton("❌ Отмена")]], resize_keyboard=True)
 
 # --- Команда /start, главное меню ---
 @dp.message(Command("start"))
-@dp.message(F.text == "🏠 Главное меню")
 @dp.message(F.text == "🚀 Начать")
 async def send_welcome(message: Message, state: FSMContext):
     await state.clear()
@@ -255,41 +253,61 @@ async def admin_panel(message: Message, state: FSMContext):
 # --- Добавить админа ---
 @dp.message(F.text == "➕ Добавить админа")
 async def admin_add_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        return
     await message.answer("Введи user_id нового админа:")
     await state.set_state(RegStates.admin_set_user)
 
 @dp.message(RegStates.admin_set_user)
 async def admin_add_process(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        await state.clear()
+        return
     try:
         user_id = int(message.text.strip())
         set_admin(user_id)
         await message.answer("✅ Админ добавлен с дефолтными правами.", reply_markup=admin_menu())
+        await state.clear()
     except:
-        await message.answer("Ошибка! Введи числовой user_id.")
-    await state.clear()
+        await message.answer("Ошибка! Введи числовой user_id.", reply_markup=admin_menu())
+        # НЕ сбрасываем FSM — чтоб пользователь мог повторить ввод
 
 # --- Снять админа ---
 @dp.message(F.text == "➖ Снять админа")
 async def admin_remove_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        return
     await message.answer("Введи user_id админа для снятия:")
     await state.set_state(RegStates.admin_remove_user)
 
 @dp.message(RegStates.admin_remove_user)
 async def admin_remove_process(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        await state.clear()
+        return
     try:
         user_id = int(message.text.strip())
         if user_id == ADMIN_ID:
-            await message.answer("Нельзя снять главного админа.")
+            await message.answer("Нельзя снять главного админа.", reply_markup=admin_menu())
+            await state.clear()
         else:
             remove_admin(user_id)
             await message.answer("✅ Админ снят.", reply_markup=admin_menu())
+            await state.clear()
     except:
-        await message.answer("Ошибка! Введи числовой user_id.")
-    await state.clear()
+        await message.answer("Ошибка! Введи числовой user_id.", reply_markup=admin_menu())
+        # НЕ сбрасываем FSM — чтоб пользователь мог повторить ввод
 
 # --- Изменить права админа ---
 @dp.message(F.text == "⚙️ Изменить права")
 async def admin_setperm_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        return
     await message.answer(
         "Введи user_id и права через пробел (например: 123456789 can_create_announce can_close_announce ...):\n"
         "Доступные права: can_create_announce, can_close_announce, can_edit_nick, can_delete_nick"
@@ -298,6 +316,10 @@ async def admin_setperm_start(message: Message, state: FSMContext):
 
 @dp.message(RegStates.admin_set_permissions)
 async def admin_setperm_process(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Нет доступа.", reply_markup=admin_menu())
+        await state.clear()
+        return
     try:
         parts = message.text.strip().split()
         user_id = int(parts[0])
@@ -306,9 +328,10 @@ async def admin_setperm_process(message: Message, state: FSMContext):
         perms = {k: (k in rights) for k in allowed}
         set_admin(user_id, perms)
         await message.answer("✅ Права обновлены.", reply_markup=admin_menu())
+        await state.clear()
     except:
-        await message.answer("Ошибка! Проверь ввод.")
-    await state.clear()
+        await message.answer("Ошибка! Проверь ввод.", reply_markup=admin_menu())
+        # НЕ сбрасываем FSM — чтоб пользователь мог повторить ввод
 
 # --- Назад из админ-панели ---
 @dp.message(F.text == "🔙 Назад")
