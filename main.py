@@ -3,24 +3,27 @@ import re
 import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    FSInputFile
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
-API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'
-ADMIN_ID = 6712617550
+API_TOKEN = 'YOUR_TOKEN_HERE'  # <-- ВСТАВЬ СВОЙ ТОКЕН!
+ADMIN_ID = 6712617550  # <-- ВСТАВЬ СВОЙ user_id
 
 bot = Bot(API_TOKEN)
 dp = Dispatcher()
 
-# Состояния FSM
+# --- FSM States ---
 class RegStates(StatesGroup):
     waiting_for_nick = State()
     editing_nick = State()
-    admin_add_id = State()
-    admin_remove_id = State()
 
-# --- Работа с БД ---
+# --- DB ---
 def db_connect():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -44,29 +47,16 @@ def add_admin(user_id):
     conn.commit()
     conn.close()
 
-def remove_admin(user_id):
-    if user_id == ADMIN_ID:
-        return
-    conn, c = db_connect()
-    c.execute('DELETE FROM admins WHERE user_id=?', (user_id,))
-    conn.commit()
-    conn.close()
-
 def main_menu(is_admin=False):
     kb = [
         [KeyboardButton(text="📝 Регистрация")],
-        [KeyboardButton(text="✏️ Изменить никнейм")]
+        [KeyboardButton(text="✏️ Изменить никнейм")],
+        [KeyboardButton(text="👥 Список игроков с никнеймом")]
     ]
     if is_admin:
-        kb.append([KeyboardButton(text="🛠 Админ-панель")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-def admin_menu():
-    kb = [
-        [KeyboardButton(text="➕ Добавить админа")],
-        [KeyboardButton(text="➖ Снять админа")],
-        [KeyboardButton(text="🔙 Назад")]
-    ]
+        kb.append([KeyboardButton(text="📢 Объявление")])
+        kb.append([KeyboardButton(text="📄 Список участников")])
+        kb.append([KeyboardButton(text="🛠 Админ-панель")])  # Всегда последней!
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def cancel_menu():
@@ -76,11 +66,24 @@ def cancel_menu():
 def is_valid_nick(nick):
     return bool(re.fullmatch(r'[A-Za-z0-9]+_[A-Za-z0-9]+', nick))
 
+# --- Handlers ---
+
 @dp.message(Command("start"))
 async def on_start(message: Message, state: FSMContext):
     await state.clear()
+    # Отправляем картинку
+    photo = FSInputFile("welcome.jpg")
+    await message.answer_photo(
+        photo,
+        caption="👋 <b>Добро пожаловать в BIZWAR BOT!</b>\n\n"
+                "Здесь ты можешь зарегистрироваться, сменить никнейм и участвовать в играх.\n"
+                "Пользуйся меню ниже — оно зависит от твоих прав.\n\n"
+                "<i>Если возникнут вопросы, пиши администратору.</i>",
+        parse_mode='HTML'
+    )
+    # Отправляем меню
     await message.answer(
-        "Добро пожаловать!\n\nДля регистрации или смены ника используйте кнопки ниже.",
+        "Главное меню:",
         reply_markup=main_menu(is_admin=is_admin(message.from_user.id))
     )
 
@@ -88,7 +91,8 @@ async def on_start(message: Message, state: FSMContext):
 async def registration_start(message: Message, state: FSMContext):
     await state.set_state(RegStates.waiting_for_nick)
     await message.answer(
-        "Введи никнейм в формате Имя_Фамилия (латиница, _ обязателен):",
+        "✍️ <b>Введи никнейм</b> в формате <code>Имя_Фамилия</code> (латиница, обязательно _):",
+        parse_mode='HTML',
         reply_markup=cancel_menu()
     )
 
@@ -100,7 +104,8 @@ async def registration_finish(message: Message, state: FSMContext):
     nickname = message.text.strip()
     if not is_valid_nick(nickname):
         await message.answer(
-            "❌ Никнейм должен быть на английском и содержать '_' (пример: Ivan_Ivanov). Попробуй ещё раз или нажми 'Отмена':"
+            "❌ <b>Ошибка!</b> Никнейм должен быть в формате <code>Имя_Фамилия</code> латиницей. Попробуй ещё раз или нажми 'Отмена'.",
+            parse_mode='HTML'
         )
         return
     conn, c = db_connect()
@@ -111,7 +116,8 @@ async def registration_finish(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
     await message.answer(
-        f"✅ Никнейм {nickname} зарегистрирован!",
+        f"✅ <b>Никнейм {nickname} зарегистрирован!</b>",
+        parse_mode='HTML',
         reply_markup=main_menu(is_admin=is_admin(message.from_user.id))
     )
     await state.clear()
@@ -120,7 +126,8 @@ async def registration_finish(message: Message, state: FSMContext):
 async def edit_nick_start(message: Message, state: FSMContext):
     await state.set_state(RegStates.editing_nick)
     await message.answer(
-        "Введи новый никнейм в формате Имя_Фамилия (латиница, _ обязателен):",
+        "✍️ <b>Введи новый никнейм</b> в формате <code>Имя_Фамилия</code> (латиница, обязательно _):",
+        parse_mode='HTML',
         reply_markup=cancel_menu()
     )
 
@@ -132,7 +139,8 @@ async def edit_nick_finish(message: Message, state: FSMContext):
     nickname = message.text.strip()
     if not is_valid_nick(nickname):
         await message.answer(
-            "❌ Никнейм должен быть на английском и содержать '_' (пример: Ivan_Ivanov). Попробуй ещё раз или нажми 'Отмена':"
+            "❌ <b>Ошибка!</b> Никнейм должен быть в формате <code>Имя_Фамилия</code> латиницей. Попробуй ещё раз или нажми 'Отмена'.",
+            parse_mode='HTML'
         )
         return
     conn, c = db_connect()
@@ -143,65 +151,28 @@ async def edit_nick_finish(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
     await message.answer(
-        f"✅ Никнейм изменён на {nickname}!",
+        f"✅ <b>Никнейм изменён на {nickname}!</b>",
+        parse_mode='HTML',
         reply_markup=main_menu(is_admin=is_admin(message.from_user.id))
     )
     await state.clear()
 
-@dp.message(F.text == "🛠 Админ-панель")
-async def admin_panel(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа.")
+@dp.message(F.text == "👥 Список игроков с никнеймом")
+async def list_players(message: Message, state: FSMContext):
+    conn, c = db_connect()
+    c.execute("SELECT nickname, username, user_id FROM users WHERE nickname IS NOT NULL AND nickname != ''")
+    rows = c.fetchall()
+    conn.close()
+    if not rows:
+        await message.answer("Пока никто не зарегистрирован.")
         return
-    await state.clear()
-    await message.answer("Меню управления администраторами:", reply_markup=admin_menu())
+    msg = "👥 <b>Список игроков:</b>\n"
+    msg += "\n".join(
+        [f"<b>{row[0]}</b> | @{row[1] or 'нет'} | <code>{row[2]}</code>" for row in rows]
+    )
+    await message.answer(msg, parse_mode='HTML')
 
-@dp.message(F.text == "➕ Добавить админа")
-async def add_admin_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа.")
-        return
-    await state.set_state(RegStates.admin_add_id)
-    await message.answer("Введи user_id для добавления в админы:", reply_markup=cancel_menu())
-
-@dp.message(RegStates.admin_add_id)
-async def add_admin_finish(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await admin_panel(message, state)
-        return
-    try:
-        user_id = int(message.text.strip())
-        add_admin(user_id)
-        await message.answer(f"✅ Админ {user_id} добавлен.", reply_markup=admin_menu())
-        await state.clear()
-    except Exception:
-        await message.answer("Ошибка! Введи числовой user_id или 'Отмена'.", reply_markup=cancel_menu())
-
-@dp.message(F.text == "➖ Снять админа")
-async def remove_admin_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа.")
-        return
-    await state.set_state(RegStates.admin_remove_id)
-    await message.answer("Введи user_id для снятия из админов:", reply_markup=cancel_menu())
-
-@dp.message(RegStates.admin_remove_id)
-async def remove_admin_finish(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await admin_panel(message, state)
-        return
-    try:
-        user_id = int(message.text.strip())
-        remove_admin(user_id)
-        await message.answer(f"✅ Админ {user_id} снят.", reply_markup=admin_menu())
-        await state.clear()
-    except Exception:
-        await message.answer("Ошибка! Введи числовой user_id или 'Отмена'.", reply_markup=cancel_menu())
-
-@dp.message(F.text == "🔙 Назад")
-async def back_from_admin(message: Message, state: FSMContext):
-    await on_start(message, state)
-
+# --- Стартовая инициализация ---
 if __name__ == "__main__":
     add_admin(ADMIN_ID)
     asyncio.run(dp.start_polling(bot))
