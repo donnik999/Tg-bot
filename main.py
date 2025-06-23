@@ -320,11 +320,14 @@ async def ann_create_finish(message: Message, state: FSMContext):
     )
     ann_id = c.lastrowid
     conn.commit()
-    # Получить всех пользователей с никнеймом
+    # Получить всех пользователей с никнеймом и всех админов
     c.execute("SELECT user_id FROM users WHERE nickname IS NOT NULL AND nickname != ''")
-    users = c.fetchall()
+    user_ids = set(user_id for (user_id,) in c.fetchall())
+    c.execute("SELECT user_id FROM admins")
+    admin_ids = set(user_id for (user_id,) in c.fetchall())
+    all_recipients = user_ids | admin_ids
     count = 0
-    for (user_id,) in users:
+    for user_id in all_recipients:
         try:
             await bot.send_message(
                 user_id,
@@ -336,10 +339,16 @@ async def ann_create_finish(message: Message, state: FSMContext):
             count += 1
         except Exception:
             pass
-    await message.answer(
-        f"✅ Объявление успешно отправлено {count} игрокам!",
-        reply_markup=main_menu(is_admin=True)
-    )
+    if count == 0:
+        await message.answer(
+            "Объявление создано, но нет пользователей с никнеймами или админов для рассылки.",
+            reply_markup=main_menu(is_admin=True)
+        )
+    else:
+        await message.answer(
+            f"✅ Объявление успешно отправлено {count} пользователям!",
+            reply_markup=main_menu(is_admin=True)
+        )
     conn.close()
     await state.clear()
 
@@ -373,6 +382,7 @@ async def list_participants(message: Message, state: FSMContext):
     conn, c = db_connect()
     c.execute("SELECT COUNT(*) FROM announcements")
     total = c.fetchone()[0]
+    conn.close()
     if total == 0:
         await message.answer("Нет объявлений.")
         return
@@ -384,6 +394,7 @@ async def show_announcement_participants(message, page, total):
     row = c.fetchone()
     if not row:
         await message.answer("Не найдено объявление на этой странице.")
+        conn.close()
         return
     ann_id, title, text = row
     msg = f"📢 <b>{title}</b>\n{text}\n\n"
