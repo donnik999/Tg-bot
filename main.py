@@ -10,8 +10,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from datetime import datetime
 
-API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'  # <-- Замени на свой токен!
-ADMIN_ID = 6712617550  # <-- Замени на свой user_id!
+API_TOKEN = '8099941356:AAFyHCfCt4jVkmXQqdIC3kufKj5f0Wg969o'  # <-- ВСТАВЬ СЮДА СВОЙ ТОКЕН!
+ADMIN_ID = 6712617550  # <-- ВСТАВЬ СЮДА СВОЙ user_id!
 
 bot = Bot(API_TOKEN)
 dp = Dispatcher()
@@ -22,7 +22,8 @@ class RegStates(StatesGroup):
     editing_nick = State()
     creating_announcement_title = State()
     creating_announcement_text = State()
-
+    adding_admin = State()
+    removing_admin = State()
 
 # --- DB ---
 def db_connect():
@@ -245,7 +246,7 @@ async def add_admin_start(message: Message, state: FSMContext):
         await message.answer("⛔ Нет доступа.")
         return
     await message.answer("Введи user_id для добавления в админы:", reply_markup=cancel_menu())
-    await state.set_state("adding_admin")
+    await state.set_state(RegStates.adding_admin)
 
 @dp.message(F.text == "➖ Снять админа")
 async def remove_admin_start(message: Message, state: FSMContext):
@@ -253,13 +254,13 @@ async def remove_admin_start(message: Message, state: FSMContext):
         await message.answer("⛔ Нет доступа.")
         return
     await message.answer("Введи user_id для снятия из админов:", reply_markup=cancel_menu())
-    await state.set_state("removing_admin")
+    await state.set_state(RegStates.removing_admin)
 
 @dp.message(F.text == "🔙 Назад")
 async def back_from_admin(message: Message, state: FSMContext):
     await on_start(message, state)
 
-@dp.message(state="adding_admin")
+@dp.message(RegStates.adding_admin)
 async def add_admin_finish(message: Message, state: FSMContext):
     if message.text == "❌ Отмена":
         await admin_panel(message, state)
@@ -272,7 +273,7 @@ async def add_admin_finish(message: Message, state: FSMContext):
     except Exception:
         await message.answer("Ошибка! Введи числовой user_id или 'Отмена'.", reply_markup=cancel_menu())
 
-@dp.message(state="removing_admin")
+@dp.message(RegStates.removing_admin)
 async def remove_admin_finish(message: Message, state: FSMContext):
     if message.text == "❌ Отмена":
         await admin_panel(message, state)
