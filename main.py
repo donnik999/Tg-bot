@@ -113,13 +113,18 @@ def announcement_response_kb(announcement_id):
         ]
     )
 
-def announcements_pagination_kb(page, total):
+def announcements_pagination_kb(page, total, ann_id, is_admin=False):
     btns = []
     if page > 1:
         btns.append(InlineKeyboardButton(text="⬅️", callback_data=f"ann_page_{page-1}"))
     if page < total:
         btns.append(InlineKeyboardButton(text="➡️", callback_data=f"ann_page_{page+1}"))
-    return InlineKeyboardMarkup(inline_keyboard=[btns]) if btns else None
+    rows = []
+    if btns:
+        rows.append(btns)
+    if is_admin:
+        rows.append([InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"ann_del_{ann_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 # --- Handlers ---
 
@@ -431,7 +436,8 @@ async def show_announcement_participants(message, page, total):
         for nickname, username, user_id, status in players:
             status_text = "✅ Готов" if status == "ready" else ("❌ Не готов" if status == "not_ready" else "—")
             msg += f"<b>{nickname}</b> | @{username or 'нет'} | <code>{user_id}</code> — {status_text}\n"
-    kb = announcements_pagination_kb(page, total)
+    is_admin_flag = is_admin(message.from_user.id)
+    kb = announcements_pagination_kb(page, total, ann_id, is_admin=is_admin_flag)
     await message.answer(msg, parse_mode="HTML", reply_markup=kb)
     conn.close()
 
@@ -444,6 +450,30 @@ async def ann_page_callback(call: types.CallbackQuery):
     conn.close()
     await show_announcement_participants(call.message, page, total)
     await call.answer()
+
+# --- Удаление объявления (только для админа) ---
+@dp.callback_query(F.data.regexp(r"^ann_del_(\d+)$"))
+async def ann_delete_callback(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔ Нет доступа.", show_alert=True)
+        return
+    ann_id = int(call.data.split("_")[-1])
+    conn, c = db_connect()
+    # Удаляем объявление и все ответы к нему
+    c.execute("DELETE FROM announcements WHERE id=?", (ann_id,))
+    c.execute("DELETE FROM announcement_responses WHERE announcement_id=?", (ann_id,))
+    conn.commit()
+    # Узнаём сколько объявлений осталось
+    c.execute("SELECT COUNT(*) FROM announcements")
+    total = c.fetchone()[0]
+    conn.close()
+    if total == 0:
+        await call.message.edit_text("Нет объявлений.", parse_mode="HTML")
+    else:
+        # После удаления показываем предыдущую страницу (или первую)
+        page = 1
+        await show_announcement_participants(call.message, page, total)
+    await call.answer("Объявление удалено!", show_alert=True)
 
 # --- Отмена везде ---
 @dp.message(F.text == "❌ Отмена")
