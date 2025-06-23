@@ -173,12 +173,11 @@ def main_menu(user_id):
         kb.append([KeyboardButton(text="📥 Активные объявления")])
         kb.append([KeyboardButton(text="📄 Список зарегистрированных пользователей")])
         if perms.get("can_manage_admins"): kb.append([KeyboardButton(text="⚙️ Управление администраторами")])
-    kb.append([KeyboardButton(text="🏠 Главное меню")])
+    # Убрана кнопка Главное меню
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- Команда /start, кнопка "Начать", "Главное меню" ---
+# --- Команда /start, кнопка "Начать" ---
 @dp.message(Command("start"))
-@dp.message(F.text == "🏠 Главное меню")
 @dp.message(F.text == "🚀 Начать")
 async def send_welcome(message: Message):
     await message.answer(
@@ -248,7 +247,10 @@ async def announce_start(message: Message, state: FSMContext):
 
 @dp.message(RegStates.waiting_for_announce)
 async def announce_send(message: Message, state: FSMContext):
-    text = message.text
+    text = message.text.strip()
+    if not text:
+        await message.answer("❗ Введите текст объявления.")
+        return
     conn, c = db_connect()
     # Записываем объявление. Статус активный.
     c.execute('INSERT INTO announcements (text, status) VALUES (?, "active")', (text,))
@@ -290,7 +292,7 @@ async def show_active_announcements(message: Message, state: FSMContext):
     announces = c.fetchall()
     conn.close()
     if not announces:
-        await message.answer("❗ Активных объявлений нет.")
+        await message.answer("❗ Сейчас нет активных объявлений.")
         return
     kb = InlineKeyboardBuilder()
     for ann_id, text in announces:
